@@ -1,7 +1,6 @@
 from flask import Flask, render_template, request, send_file
 import pandas as pd
 import os
-import glob
 import joblib
 import logging
 
@@ -9,29 +8,14 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Dynamically resolve the clustering pipeline path
-pipeline_path = os.getenv("MODEL_PATH", None)
-if not pipeline_path:
-    try:
-        # Dynamic resolution for Azure Linux environments
-        dynamic_pipeline_path = glob.glob("/home/site/wwwroot/models/clustering_pipeline.pkl")
-        if dynamic_pipeline_path:
-            pipeline_path = dynamic_pipeline_path[0]
-            logger.info(f"Model found dynamically at: {pipeline_path}")
-        else:
-            raise FileNotFoundError
-    except FileNotFoundError:
-        # Fall back to a hardcoded path
-        pipeline_path = "./models/clustering_pipeline.pkl"
-        logger.warning(f"Dynamic resolution failed. Using fallback path: {pipeline_path}")
-
 # Load the clustering pipeline
-try:
-    clustering_pipeline = joblib.load(pipeline_path)
-    logger.info(f"Clustering pipeline loaded successfully from: {pipeline_path}")
-except Exception as e:
-    logger.error(f"Failed to load clustering pipeline: {e}")
+pipeline_path = os.getenv("MODEL_PATH", "./models/clustering_pipeline_fixed.pkl")
+if not os.path.exists(pipeline_path):
+    logger.error(f"Model file not found at {pipeline_path}")
     clustering_pipeline = None
+else:
+    clustering_pipeline = joblib.load(pipeline_path)
+    logger.info(f"Clustering pipeline loaded successfully from {pipeline_path}")
 
 app = Flask(__name__)
 
@@ -44,49 +28,48 @@ def upload():
             return "Error: Please upload a CSV file."
 
         try:
-            # Read the uploaded file
-            logger.info(f"Uploaded file: {uploaded_file.filename}")
+            # Read uploaded file
             data = pd.read_csv(uploaded_file, encoding="latin1", on_bad_lines="skip")
+            logger.info(f"Uploaded file columns: {list(data.columns)}")
 
-            # Select numeric columns for clustering
+            # Select numeric columns
             numeric_data = data.select_dtypes(include=["float64", "int64"])
-            logger.info(f"Numeric columns detected: {numeric_data.columns.tolist()}")
+            logger.info(f"Numeric columns detected: {list(numeric_data.columns)}")
 
             if numeric_data.empty:
-                logger.error("No numeric data found in the uploaded file.")
+                logger.error("No numeric columns found in the uploaded file.")
                 return "Error: No numeric data found in the uploaded file."
 
-            # Validate the pipeline and align data
-            if clustering_pipeline is not None:
-                required_features = clustering_pipeline.named_steps["scaler"].feature_names_in_
-                logger.info(f"Required features for the model: {required_features}")
-
-                # Align input data with required features
-                missing_features = [f for f in required_features if f not in numeric_data.columns]
+            # Align features with the model
+            if clustering_pipeline:
+                expected_features = clustering_pipeline.named_steps["scaler"].feature_names_in_
+                logger.info(f"Model expects features: {list(expected_features)}")
+                missing_features = [col for col in expected_features if col not in numeric_data.columns]
                 if missing_features:
                     logger.error(f"Missing features: {missing_features}")
-                    return f"Error: The following required features are missing: {missing_features}"
+                    return f"Error: Missing required features: {missing_features}"
 
-                numeric_data = numeric_data[required_features]
+                numeric_data = numeric_data[expected_features]
                 cluster_labels = clustering_pipeline.predict(numeric_data)
             else:
                 logger.error("Clustering pipeline not loaded.")
                 return "Error: Clustering pipeline not loaded."
 
-            # Add cluster labels to the original data
+            # Add cluster labels to the data
             data["Cluster"] = cluster_labels
 
-            # Save clustered data to a file
-            output_path = "/home/site/wwwroot/data/output_with_clusters.csv"
-            os.makedirs("/home/site/wwwroot/data", exist_ok=True)
+            # Save clustered data
+            output_path = "./data/output_with_clusters.csv"
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             data.to_csv(output_path, index=False)
-            logger.info(f"Clustered data saved to: {output_path}")
+            logger.info(f"Clustered data saved to {output_path}")
 
             # Generate clustering summary
-            numeric_data["Cluster"] = cluster_labels
-            cluster_summary = numeric_data.groupby("Cluster").mean()
+            cluster_summary = numeric_data.copy()
+            cluster_summary["Cluster"] = cluster_labels
+            cluster_summary = cluster_summary.groupby("Cluster").mean()
 
-            # Render results with a summary
+            # Render results
             return render_template(
                 "results.html",
                 tables=[cluster_summary.to_html(classes="table")],
@@ -94,22 +77,18 @@ def upload():
             )
 
         except Exception as e:
-            logger.error(f"Error processing file: {e}")
+            logger.error(f"Error during file processing: {e}")
             return f"An error occurred while processing the file: {str(e)}"
 
     return render_template("upload.html")
 
-
 @app.route("/download")
 def download():
-    file_path = "/home/site/wwwroot/data/output_with_clusters.csv"
+    file_path = "./data/output_with_clusters.csv"
     if os.path.exists(file_path):
-        logger.info(f"Sending clustered file to user: {file_path}")
         return send_file(file_path, as_attachment=True)
     else:
-        logger.error("Clustered file not found.")
         return "Error: Clustered file not found. Please upload and process a dataset first."
-
 
 if __name__ == "__main__":
     logger.info("Starting Flask app...")
