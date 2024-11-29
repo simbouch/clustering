@@ -3,6 +3,10 @@ import pandas as pd
 import os
 import joblib
 import logging
+import matplotlib.pyplot as plt
+import io
+import base64
+import seaborn as sns
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -65,14 +69,17 @@ def upload():
             logger.info(f"Clustered data saved to {output_path}")
 
             # Generate clustering summary
-            cluster_summary = numeric_data.copy()
-            cluster_summary["Cluster"] = cluster_labels
-            cluster_summary = cluster_summary.groupby("Cluster").mean()
+            numeric_data["Cluster"] = cluster_labels
+            cluster_summary = numeric_data.groupby("Cluster").mean()
+
+            # Generate visualizations
+            plots = generate_visualizations(numeric_data, cluster_labels)
 
             # Render results
             return render_template(
                 "results.html",
                 tables=[cluster_summary.to_html(classes="table")],
+                plots=plots,
                 download_path="/download"
             )
 
@@ -89,6 +96,48 @@ def download():
         return send_file(file_path, as_attachment=True)
     else:
         return "Error: Clustered file not found. Please upload and process a dataset first."
+
+def generate_visualizations(numeric_data, cluster_labels):
+    plots = []
+
+    # Scatter Plot of Clusters
+    plt.figure(figsize=(8, 6))
+    for cluster in numeric_data["Cluster"].unique():
+        cluster_points = numeric_data[numeric_data["Cluster"] == cluster]
+        plt.scatter(cluster_points.iloc[:, 0], cluster_points.iloc[:, 1], label=f"Cluster {cluster}")
+    plt.title("Cluster Visualization")
+    plt.xlabel("Feature 1")
+    plt.ylabel("Feature 2")
+    plt.legend()
+    plots.append(figure_to_base64())
+
+    # Distribution of Cluster Counts
+    plt.figure(figsize=(8, 6))
+    sns.countplot(x=cluster_labels, palette="viridis")
+    plt.title("Distribution of Cluster Counts")
+    plt.xlabel("Cluster")
+    plt.ylabel("Count")
+    plots.append(figure_to_base64())
+
+    # Box Plot for Features
+    numeric_data_melted = numeric_data.melt(id_vars=["Cluster"], var_name="Feature", value_name="Value")
+    plt.figure(figsize=(10, 8))
+    sns.boxplot(data=numeric_data_melted, x="Feature", y="Value", hue="Cluster", palette="viridis")
+    plt.title("Box Plot of Features by Cluster")
+    plt.xticks(rotation=45)
+    plots.append(figure_to_base64())
+
+    return plots
+
+def figure_to_base64():
+    """Converts the current Matplotlib figure to a Base64 string."""
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format="png")
+    buffer.seek(0)
+    base64_string = base64.b64encode(buffer.getvalue()).decode()
+    buffer.close()
+    plt.close()
+    return base64_string
 
 if __name__ == "__main__":
     logger.info("Starting Flask app...")
