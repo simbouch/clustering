@@ -9,7 +9,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Resolve the clustering pipeline path
+# Dynamically resolve the clustering pipeline path
 pipeline_path = os.getenv("MODEL_PATH", None)
 if not pipeline_path:
     try:
@@ -21,7 +21,7 @@ if not pipeline_path:
         else:
             raise FileNotFoundError
     except FileNotFoundError:
-        # Fall back to hardcoded path
+        # Fall back to a hardcoded path
         pipeline_path = "./models/clustering_pipeline.pkl"
         logger.warning(f"Dynamic resolution failed. Using fallback path: {pipeline_path}")
 
@@ -44,7 +44,7 @@ def upload():
             return "Error: Please upload a CSV file."
 
         try:
-            # Read uploaded file
+            # Read the uploaded file
             logger.info(f"Uploaded file: {uploaded_file.filename}")
             data = pd.read_csv(uploaded_file, encoding="latin1", on_bad_lines="skip")
 
@@ -53,29 +53,38 @@ def upload():
             logger.info(f"Numeric columns detected: {numeric_data.columns.tolist()}")
 
             if numeric_data.empty:
-                logger.error("No numeric columns found in the uploaded file.")
+                logger.error("No numeric data found in the uploaded file.")
                 return "Error: No numeric data found in the uploaded file."
 
-            # Apply clustering pipeline
+            # Validate the pipeline and align data
             if clustering_pipeline is not None:
+                required_features = clustering_pipeline.named_steps["scaler"].feature_names_in_
+                logger.info(f"Required features for the model: {required_features}")
+
+                # Align input data with required features
+                missing_features = [f for f in required_features if f not in numeric_data.columns]
+                if missing_features:
+                    logger.error(f"Missing features: {missing_features}")
+                    return f"Error: The following required features are missing: {missing_features}"
+
+                numeric_data = numeric_data[required_features]
                 cluster_labels = clustering_pipeline.predict(numeric_data)
             else:
                 logger.error("Clustering pipeline not loaded.")
                 return "Error: Clustering pipeline not loaded."
 
-            # Add cluster labels to the dataset
+            # Add cluster labels to the original data
             data["Cluster"] = cluster_labels
 
-            # Save clustered data to file
+            # Save clustered data to a file
             output_path = "/home/site/wwwroot/data/output_with_clusters.csv"
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            os.makedirs("/home/site/wwwroot/data", exist_ok=True)
             data.to_csv(output_path, index=False)
             logger.info(f"Clustered data saved to: {output_path}")
 
             # Generate clustering summary
-            cluster_summary = numeric_data.copy()
-            cluster_summary["Cluster"] = cluster_labels
-            cluster_summary = cluster_summary.groupby("Cluster").mean()
+            numeric_data["Cluster"] = cluster_labels
+            cluster_summary = numeric_data.groupby("Cluster").mean()
 
             # Render results with a summary
             return render_template(
@@ -90,6 +99,7 @@ def upload():
 
     return render_template("upload.html")
 
+
 @app.route("/download")
 def download():
     file_path = "/home/site/wwwroot/data/output_with_clusters.csv"
@@ -99,6 +109,7 @@ def download():
     else:
         logger.error("Clustered file not found.")
         return "Error: Clustered file not found. Please upload and process a dataset first."
+
 
 if __name__ == "__main__":
     logger.info("Starting Flask app...")
